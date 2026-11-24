@@ -16,6 +16,11 @@ their parking place as they faded, over the card. Not on every stroke,
 about one in three here, so it is tried several times; on each, once the
 last space's rows have gone off the column, none of them comes back over
 it. The card is now brought a frame at a time, as a space is (SwipeGlide).
+
+A second stroke the same way, begun while the card is still sliding in,
+ends on the card, as it did when the slide was an animation: paused by the
+fingers, the slide's arrival is run there and then (SpaceSwipe.arriveNow),
+where at first it was dropped and the stroke ended on the last space.
 """
 import json
 import os
@@ -56,18 +61,24 @@ def rows_back(frames):
     some of them over it again: dark text in the band where its rows stand,
     right of where the card's own lines begin, above the card."""
     def ink(image):
-        band = image.crop((200, 85, 318, 235)).convert("L")
+        # In points: on a Retina screen the frames come at twice the size.
+        k = image.size[0] / 420
+        band = image.crop(tuple(int(v * k) for v in (200, 85, 318, 235))).convert("L").resize((118, 150))
         return sum(1 for v in band.getdata() if v < 175)
     seen = [ink(Image.open(f["file"])) for f in frames if "file" in f]
     gone = next((i for i, v in enumerate(seen) if i > 2 and v < 5), None)
     return [i for i, v in enumerate(seen) if gone is not None and i > gone and v >= 40]
 
 
+def back_from_card():
+    """Back from the card to the last space, its rows in the column."""
+    sv.cmd({"do": "spacestroke", "dx": 15, "steps": 10, "ms": 150, "glide": 0})
+    time.sleep(1.5)
+
+
 def on_to_card(n):
     if n > 1:
-        # Back from the card to the last space, its rows in the column.
-        sv.cmd({"do": "spacestroke", "dx": 15, "steps": 10, "ms": 150, "glide": 0})
-        time.sleep(1.5)
+        back_from_card()
     filmed = {}
     film = threading.Thread(target=lambda: filmed.update(
         sv.cmd({"do": "layershot", "path": f"{OUT}/card{n}", "frames": 60, "every": 1 / 60})))
@@ -78,6 +89,21 @@ def on_to_card(n):
     t.ok(f"stroke {n}: the card for a new space came", r["making"], (r["space"], r["events"][-3:]))
     back = rows_back(filmed.get("frames", []))
     t.ok(f"stroke {n}: the last space's rows don't come back over the column", not back, back)
+
+
+def twice_to_card(after):
+    """A stroke on to the card, and another the same way `after` seconds
+    after the first lets go, the card still sliding in."""
+    back_from_card()
+    first = {}
+    stroke = threading.Thread(target=lambda: first.update(
+        sv.cmd({"do": "spacestroke", "dx": -60, "steps": 20, "ms": 300, "glide": 0})))
+    stroke.start()
+    time.sleep(0.3 + after)
+    r = sv.cmd({"do": "spacestroke", "dx": -30, "steps": 10, "ms": 150, "glide": 0})
+    stroke.join()
+    t.ok(f"a second stroke {int(after * 1000)} ms after the first ends on the card", r["making"],
+         (r["space"], r["events"][-3:]))
 
 
 try:
@@ -95,6 +121,9 @@ try:
         time.sleep(1.5)
     for n in range(1, STROKES + 1):
         on_to_card(n)
+        time.sleep(1)
+    for after in (0.02, 0.05, 0.08):
+        twice_to_card(after)
         time.sleep(1)
 finally:
     t.done()

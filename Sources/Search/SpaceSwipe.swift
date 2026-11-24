@@ -58,6 +58,10 @@ final class SpaceSwipe {
     private var fingersDown = false
     /// The space on its way in, to be taken a moment after its rows stop.
     private var landing: DispatchWorkItem?
+    /// What a slide on to the card, or off to another profile, does once
+    /// its rows are there (carry), where it takes them, and which slide it is.
+    private var arriving: (slide: Int, to: CGFloat, run: () -> Void)?
+    private var carried = 0
 
     /// Not quite in place: drawn in place, the map still showing (land).
     static let hair: CGFloat = 0.001
@@ -240,6 +244,7 @@ final class SpaceSwipe {
     /// back to its own; one from further along (⌃1–⌃9) is drawn beside it
     /// (Browser.mapSlot).
     private func glide(_ browser: Browser, to id: UUID, step: Int, width: CGFloat) {
+        arriveNow(browser)
         SwipeGlide.pause()
         // One that came from further along is taken before going on.
         if let coming = browser.spaceComing, let at = browser.spaces.firstIndex(where: { $0.id == coming }),
@@ -358,12 +363,42 @@ final class SpaceSwipe {
     /// snaps back without moving (Motion.settle).
     private func carry(_ browser: Browser, to offset: CGFloat, then arrived: @escaping () -> Void) {
         guard !Motion.reduced else { return arrived() }
+        // One still on its way, there first.
+        arrive()
+        carried += 1
+        let slide = carried
+        arriving = (slide, offset, arrived)
         // A frame at a time, as a space is brought (bring). Animated in one
         // go, the rows were at the end of the way at once: those of the
         // space on screen, a whole page off, were parked there (SwipeShift),
         // and slid back across the column to their parking place as they
         // faded, over the card coming in.
-        SwipeGlide.start(browser, to: offset, speed: letGoSpeed, done: arrived)
+        SwipeGlide.start(browser, to: offset, speed: letGoSpeed, done: { [weak self] in self?.arrive(slide) })
+    }
+
+    /// A carried slide's arrival: that slide's once its rows are there, or
+    /// whichever is waiting.
+    private func arrive(_ slide: Int? = nil) {
+        guard let pending = arriving, slide == nil || slide == pending.slide else { return }
+        arriving = nil
+        pending.run()
+    }
+
+    /// Fingers or ⌃1–⌃9 taking the rows while they are carried (carry): the
+    /// slide arrived now, as the animation it was did when stopped, and the
+    /// rows left where they are, counted from there. Paused with it, its
+    /// arrival was dropped, and a second stroke on to the card, begun as
+    /// the first slid in, ended back on the last space.
+    private func arriveNow(_ browser: Browser) {
+        guard let pending = arriving else { return }
+        SwipeGlide.pause()
+        let at = browser.spaceSwipe
+        arrive()
+        // Off to another profile, its window has the fingers now.
+        guard self.browser === browser else { return }
+        var still = Transaction()
+        still.disablesAnimations = true
+        withTransaction(still) { browser.spaceSwipe = at - pending.to }
     }
 
     /// Where the tabs are: the column, or the bar across the top.
@@ -515,6 +550,7 @@ final class SpaceSwipe {
         }
         if !holding {
             holding = true
+            arriveNow(browser)
             // Scrolled since the map drew this space: drawn again, as the
             // column is now.
             if browser.mapScroll(fits: browser.mapDrew.fits) != browser.mapDrew.scrolled { browser.mapDrawn.value += 1 }
